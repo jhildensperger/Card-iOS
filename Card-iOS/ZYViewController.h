@@ -8,12 +8,23 @@
 
 #import <UIKit/UIKit.h>
 
+@interface ZYInputLabel : UILabel
+
+@property (nonatomic, assign) UIKeyboardType keyboardType;
+@property (nonatomic) NSString *placeHolder;
+
+@end
+
 @interface CardView : UIView
 
-@property (nonatomic, weak) IBOutlet UILabel *cardNumberLabel;
-@property (nonatomic, weak) IBOutlet UILabel *nameLabel;
-@property (nonatomic, weak) IBOutlet UILabel *exprirationLabel;
-@property (nonatomic, weak) IBOutlet UILabel *cvcLabel;
+@property (nonatomic, weak) IBOutlet UIView *inputFieldContainerView;
+@property (nonatomic, weak) IBOutlet UITextField *inputField;
+@property (nonatomic, weak) IBOutlet UIStepper *inputFieldStepper;
+
+@property (nonatomic, weak) IBOutlet ZYInputLabel *cardNumberLabel;
+@property (nonatomic, weak) IBOutlet ZYInputLabel *nameLabel;
+@property (nonatomic, weak) IBOutlet ZYInputLabel *exprirationLabel;
+@property (nonatomic, weak) IBOutlet ZYInputLabel *cvcLabel;
 @property (nonatomic, weak) IBOutlet UIImageView *cardTypeImageView;
 
 @end
@@ -21,10 +32,5 @@
 @interface ZYViewController : UIViewController
 
 @property (nonatomic, weak) IBOutlet CardView *cardView;
-@property (nonatomic, weak) IBOutlet UITextField *cardNumberField;
-@property (nonatomic, weak) IBOutlet UITextField *nameField;
-@property (nonatomic, weak) IBOutlet UITextField *exprirationField;
-@property (nonatomic, weak) IBOutlet UITextField *cvcField;
-@property (nonatomic) IBOutletCollection(UITextField) NSArray *cardFields;
 
 @end
