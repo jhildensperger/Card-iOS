@@ -9,17 +9,182 @@
 #import "ZYViewController.h"
 #import "UIFont+Additions.h"
 #import "ReactiveCocoa.h"
-#import <BlocksKit/UIAlertView+BlocksKit.h>
+#import "BlocksKit+UIKit.h"
+
+@interface ZYInputLabel ()
+
+@property (nonatomic, copy) id(^mappingBlock)(id field);
+
+@end
+
+@implementation ZYInputLabel
+
+@end
+
+@interface CardView ()
+
+@property (nonatomic) NSArray *inputLabels;
+@property (nonatomic) ZYInputLabel *activeInputLabel;
+
+@end
 
 @implementation CardView
 
-@end
++ (void)animateWithDuration:(NSTimeInterval)duration delay:(NSTimeInterval)delay curve:(UIViewAnimationCurve)curve animations:(void (^)(void))animations {
+    if (!animations) return;
+    
+    [UIView beginAnimations:nil context:NULL];
+    [UIView setAnimationDuration:duration];
+    [UIView setAnimationDelay:delay];
+    [UIView setAnimationCurve:curve];
+    [UIView setAnimationBeginsFromCurrentState:YES];
+    animations();
+    [UIView commitAnimations];
+}
 
-@interface ZYViewController ()
+- (void)awakeFromNib {
+    [super awakeFromNib];
+    
+    [self setupKeyboardNotifications];
+    [self setupStepperBinding];
+    [self setupCardNumberLabelBinding];
+    [self setupNameLabelBinding];
+    [self setupExpirationLabelBinding];
+    [self setupCvcLabelBinding];
 
-@end
+    self.inputLabels = @[self.cardNumberLabel, self.nameLabel, self.exprirationLabel, self.cvcLabel];
+    
+    [self.inputLabels enumerateObjectsUsingBlock:^(ZYInputLabel *inputLabel, NSUInteger idx, BOOL *stop) {
+        UITapGestureRecognizer *cardNumberTapGestureRecognizer = [[UITapGestureRecognizer alloc] bk_initWithHandler:^(UIGestureRecognizer *sender, UIGestureRecognizerState state, CGPoint location) {
+            self.inputFieldStepper.value = idx;
+            [self.inputFieldStepper sendActionsForControlEvents:UIControlEventValueChanged];
+        }];
+        [inputLabel addGestureRecognizer:cardNumberTapGestureRecognizer];
+    }];
+}
 
-@implementation ZYViewController
+- (void)setupKeyboardNotifications {
+    RACSignal *keyboardWillShowOrHide = [[[NSNotificationCenter defaultCenter] rac_addObserverForName:UIKeyboardWillShowNotification object:nil] merge:[[NSNotificationCenter defaultCenter] rac_addObserverForName:UIKeyboardWillHideNotification object:nil]];
+    [[keyboardWillShowOrHide takeUntil:self.rac_willDeallocSignal] subscribeNext:^(id x) {
+        BOOL isWillShowNotification = [[x name] isEqualToString:UIKeyboardWillShowNotification];
+        CGFloat duration = [[x userInfo][UIKeyboardAnimationDurationUserInfoKey] floatValue];
+        NSUInteger curve = [[x userInfo][UIKeyboardAnimationCurveUserInfoKey] integerValue];
+        CGRect endFrame = [[x userInfo][UIKeyboardFrameEndUserInfoKey] CGRectValue];
+        [CardView animateWithDuration:duration delay:0 curve:curve animations:^{
+            self.inputFieldContainerView.alpha = isWillShowNotification;
+            self.inputFieldContainerView.center = CGPointMake(self.inputFieldContainerView.center.x, CGRectGetMinY(endFrame) - self.inputFieldContainerView.frame.size.height/2);
+        }];
+    }];
+}
+
+- (void)setupStepperBinding {
+    [self.inputFieldStepper bk_addEventHandler:^(UIStepper *stepper) {
+        ZYInputLabel *inputLabel = self.inputLabels[(int)stepper.value];
+        self.activeInputLabel = inputLabel;
+        
+        self.inputField.keyboardType = inputLabel.keyboardType;
+        self.inputField.placeholder = inputLabel.placeHolder;
+        [self.inputField reloadInputViews];
+        
+        RACSignal *textSignal = [self.inputField.rac_textSignal map:inputLabel.mappingBlock];
+        [inputLabel rac_liftSelector:@selector(setText:) withSignals:textSignal, nil];
+        
+        [self.inputField becomeFirstResponder];
+        self.inputField.text = nil;
+    } forControlEvents:UIControlEventValueChanged];
+}
+
+- (void)setupCardNumberLabelBinding {
+    self.cardNumberLabel.keyboardType = UIKeyboardTypeNumberPad;
+    self.cardNumberLabel.placeHolder = @"●●●● ●●●● ●●●● ●●●●";
+    self.cardNumberLabel.mappingBlock = ^id(id value) {
+        if ([value isEqualToString:@""]) {
+            self.cardNumberLabel.font = [UIFont creditCardFontOfSize:19];
+            return self.cardNumberLabel.placeHolder;
+        }
+        
+        NSString *processedValue = [self.class formatString:value];
+        BOOL isValid = [self.class validateString:processedValue];
+        self.cardNumberLabel.textColor = [[UIColor lightGrayColor] colorWithAlphaComponent:isValid ? 1 : .5];
+        self.cardNumberLabel.font = [UIFont creditCardFontOfSize:15];
+        
+        __block NSString *type;
+        [[self.class creditCards] enumerateObjectsUsingBlock:^(NSDictionary *cardInfo, NSUInteger idx, BOOL *stop) {
+            NSPredicate *predicate = [NSPredicate predicateWithFormat:@"SELF MATCHES %@", cardInfo[@"pattern"]];
+            if ([predicate evaluateWithObject:processedValue]) {
+                type = cardInfo[@"type"];
+                *stop = YES;
+            }
+        }];
+        
+        static NSString *imageName;
+        if (![imageName isEqualToString:type]) {
+            if (type) {
+                self.cardTypeImageView.image = [UIImage imageNamed:type];
+                [UIView animateWithDuration:.5 animations:^{
+                    self.cardTypeImageView.alpha = 1;
+                }];
+            } else if (self.cardTypeImageView.alpha) {
+                [UIView animateWithDuration:.25 animations:^{
+                    self.cardTypeImageView.alpha = 0;
+                } completion:^(BOOL finished) {
+                    self.cardTypeImageView.image = nil;
+                }];
+            }
+            
+            imageName = type;
+        }
+        
+        if (4 < [processedValue length] && [processedValue length] <= 8) {
+            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(4, 0) withString:@" "];
+        } else if (8 < [processedValue length] && [processedValue length] <= 12) {
+            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(4, 0) withString:@" "];
+            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(9, 0) withString:@" "];
+        } else if ([processedValue length] >= 13) {
+            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(4, 0) withString:@" "];
+            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(9, 0) withString:@" "];
+            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(14, 0) withString:@" "];
+        }
+        self.inputField.text = processedValue;
+        return processedValue;
+    };
+}
+
+- (void)setupNameLabelBinding {
+    self.nameLabel.mappingBlock = ^id(id value) {
+        if ([value isEqualToString:@""]) {
+            return @"NAME ON CARD";
+        }
+        return [value uppercaseString];
+    };
+}
+
+- (void)setupExpirationLabelBinding {
+    self.exprirationLabel.keyboardType = UIKeyboardTypeNumberPad;
+    self.exprirationLabel.mappingBlock = ^id(id value) {
+        static NSString *slashString = @" / ";
+        if ([value isEqualToString:@""]) {
+            return @"●● / ●●";
+        }
+        
+        if ([value length] == 2) {
+            self.inputField.text = [value stringByReplacingCharactersInRange:NSMakeRange(2, 0) withString:slashString];
+        } else if ([value length] == 5) {
+            self.inputField.text = [value stringByReplacingOccurrencesOfString:slashString withString:@""];
+        }
+        return self.inputField.text;
+    };
+}
+
+- (void)setupCvcLabelBinding {
+    self.cvcLabel.keyboardType = UIKeyboardTypeNumberPad;
+    self.cvcLabel.mappingBlock = ^id(id value) {
+        if ([value isEqualToString:@""]) {
+            return @"●●●";
+        }
+        return [value uppercaseString];
+    };
+}
 
 + (NSArray *)creditCards {
     static NSArray *creditCards;
@@ -97,6 +262,14 @@
     return [components componentsJoinedByString:@""];
 }
 
+@end
+
+@interface ZYViewController ()
+
+@end
+
+@implementation ZYViewController
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self configureCardView];
@@ -108,17 +281,6 @@
         self.cardView.layer.shadowOffset = CGSizeZero;
     } completion:nil];
     self.cardView.layer.cornerRadius = 9.0f;
-    
-    [self.cardFields enumerateObjectsUsingBlock:^(UITextField *textfield, NSUInteger idx, BOOL *stop) {
-        textfield.layer.borderColor = [UIColor colorWithWhite:0.800 alpha:1.000].CGColor;
-        textfield.layer.borderWidth = 1;
-        
-        UIView *spacerView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 5, 5)];
-        [textfield setLeftViewMode:UITextFieldViewModeAlways];
-        [textfield setLeftView:spacerView];
-        [textfield setRightViewMode:UITextFieldViewModeAlways];
-        [textfield setRightView:spacerView];
-    }];
 }
 
 
@@ -130,91 +292,6 @@
     self.cardView.exprirationLabel.font = [UIFont creditCardFontOfSize:12];
     self.cardView.exprirationLabel.userInteractionEnabled = YES;
     self.cardView.cvcLabel.font = [UIFont creditCardFontOfSize:15];
-    
-    RACSignal *cardNumberFieldSignal = [self.cardNumberField.rac_textSignal map:^id(id value) {
-        if ([value isEqualToString:@""]) {
-            self.cardView.cardNumberLabel.font = [UIFont creditCardFontOfSize:19];
-            return @"●●●● ●●●● ●●●● ●●●●";
-        }
-        
-        NSString *processedValue = [self.class formatString:value];
-        BOOL isValid = [self.class validateString:processedValue];
-        self.cardView.cardNumberLabel.textColor = [[UIColor lightGrayColor] colorWithAlphaComponent:isValid ? 1 : .5];
-        self.cardView.cardNumberLabel.font = [UIFont creditCardFontOfSize:15];
-
-        __block NSString *type;
-        [[self.class creditCards] enumerateObjectsUsingBlock:^(NSDictionary *cardInfo, NSUInteger idx, BOOL *stop) {
-            NSPredicate *predicate = [NSPredicate predicateWithFormat:@"SELF MATCHES %@", cardInfo[@"pattern"]];
-            if ([predicate evaluateWithObject:processedValue]) {
-                type = cardInfo[@"type"];
-                *stop = YES;
-            }
-        }];
-        
-        static NSString *imageName;
-        if (![imageName isEqualToString:type]) {
-            if (type) {
-                self.cardView.cardTypeImageView.image = [UIImage imageNamed:type];
-                [UIView animateWithDuration:.5 animations:^{
-                    self.cardView.cardTypeImageView.alpha = 1;
-                }];
-            } else if (self.cardView.cardTypeImageView.alpha) {
-                [UIView animateWithDuration:.25 animations:^{
-                    self.cardView.cardTypeImageView.alpha = 0;
-                } completion:^(BOOL finished) {
-                    self.cardView.cardTypeImageView.image = nil;
-                }];
-            }
-            
-            imageName = type;
-        }
-
-        if (4 < [processedValue length] && [processedValue length] <= 8) {
-            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(4, 0) withString:@" "];
-        } else if (8 < [processedValue length] && [processedValue length] <= 12) {
-            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(4, 0) withString:@" "];
-            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(9, 0) withString:@" "];
-        } else if ([processedValue length] >= 13) {
-            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(4, 0) withString:@" "];
-            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(9, 0) withString:@" "];
-            processedValue = [processedValue stringByReplacingCharactersInRange:NSMakeRange(14, 0) withString:@" "];
-        }
-        self.cardNumberField.text = processedValue;
-        return processedValue;
-    }];
-    [self.cardView.cardNumberLabel rac_liftSelector:@selector(setText:) withSignals:cardNumberFieldSignal, nil];
-    
-    RACSignal *nameFieldSignal = [self.nameField.rac_textSignal map:^id(id value) {
-        if ([value isEqualToString:@""]) {
-            return @"NAME ON CARD";
-        }
-        return [value uppercaseString];
-    }];
-    [self.cardView.nameLabel rac_liftSelector:@selector(setText:) withSignals:nameFieldSignal, nil];
-    
-    
-    RACSignal *exprirationFieldSignal = [self.exprirationField.rac_textSignal map:^id(id value) {
-        static NSString *slashString = @" / ";
-        if ([value isEqualToString:@""]) {
-            return @"●● / ●●";
-        }
-        
-        if ([value length] == 2) {
-            self.exprirationField.text = [value stringByReplacingCharactersInRange:NSMakeRange(2, 0) withString:slashString];
-        } else if ([value length] == 5) {
-            self.exprirationField.text = [value stringByReplacingOccurrencesOfString:slashString withString:@""];
-        }
-        return self.exprirationField.text;
-    }];
-    [self.cardView.exprirationLabel rac_liftSelector:@selector(setText:) withSignals:exprirationFieldSignal, nil];
-    
-    RACSignal *cvcFieldSignal = [self.cvcField.rac_textSignal map:^id(id value) {
-        if ([value isEqualToString:@""]) {
-            return @"●●●";
-        }
-        return [value uppercaseString];
-    }];
-    [self.cardView.cvcLabel rac_liftSelector:@selector(setText:) withSignals:cvcFieldSignal, nil];
 }
 
 #pragma mark - actions 
@@ -222,24 +299,16 @@
    UIAlertView *alertView = [UIAlertView bk_alertViewWithTitle:@"Submit Card" message:@"This will send me your credit information"];
     [alertView bk_setCancelButtonWithTitle:@"Cancel" handler:nil];
     [alertView bk_addButtonWithTitle:@"Yes" handler:^{
-        [self.cardFields enumerateObjectsUsingBlock:^(UITextField *textfield, NSUInteger idx, BOOL *stop) {
-            textfield.text = @"";
-            [textfield sendActionsForControlEvents:UIControlEventEditingChanged];
-        }];
+//        [self.cardFields enumerateObjectsUsingBlock:^(UITextField *textfield, NSUInteger idx, BOOL *stop) {
+//            textfield.text = @"";
+//            [textfield sendActionsForControlEvents:UIControlEventEditingChanged];
+//        }];
     }];
     [alertView show];
 }
 
-- (IBAction)didTapCardNumberLabel:(id)sender {
-    [self.cardNumberField becomeFirstResponder];
-}
-
-- (IBAction)didTapNameLabel:(id)sender {
-    [self.nameField becomeFirstResponder];
-}
-
-- (IBAction)didTapExpirationLabel:(id)sender {
-    [self.exprirationField becomeFirstResponder];
+- (IBAction)didTapSendButton:(id)sender {
+    [self.cardView.inputField resignFirstResponder];
 }
 
 @end
